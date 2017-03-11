@@ -72,22 +72,25 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
-        initial_state_fw_cell = tf.slice(encoder_state_input, [0,0],[None,self.size/2])
-        initial_state_bw_cell = tf.slice(encoder_state_input, [0,self.size/2],[None,self.size/2])
+        cell_size = slef.size
+        initial_state_fw_cell = tf.slice(encoder_state_input, [0,0],[-1,cell_size])
+        initial_state_bw_cell = tf.slice(encoder_state_input, [0,cell_size],[-1,cell_size])
+        cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
+        cell_bw_srl = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
         output, state = tf.nn.bidirectional_dynamic_rnn(    
-                                            tf.nn.rnn_cell.LSTMCell(self.size),
-                                            tf.nn.rnn_cell.LSTMCell(self.size),
+                                            cell_fw,
+                                            cell_bw,
                                             embeddings,
                                             dtype=tf.float32,
                                             sequence_length=length(inputs),
                                             initial_state_fw= initial_state_fw_cell,
                                             initial_state_bw= initial_state_bw_cell,
-                                            time_major = True
+                                            time_major = False
                                             )
     
         
 
-        return state
+        return tf.concat(state,2)
 
 
 class Decoder(object):
