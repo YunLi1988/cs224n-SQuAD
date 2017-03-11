@@ -1,0 +1,46 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{3675e10f-54fd-4217-a19f-886d9e46ec87}</ProjectGuid>
+    <ProjectHome />
+    <StartupFile>evaluate.py</StartupFile>
+    <SearchPath />
+    <WorkingDirectory>.</WorkingDirectory>
+    <OutputPath>.</OutputPath>
+    <ProjectTypeGuids>{888888a0-9f3d-457c-b088-3a5042f75d52}</ProjectTypeGuids>
+    <LaunchProvider>Standard Python launcher</LaunchProvider>
+    <InterpreterId />
+    <InterpreterVersion />
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'" />
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'" />
+  <PropertyGroup>
+    <VisualStudioVersion Condition=" '$(VisualStudioVersion)' == '' ">10.0</VisualStudioVersion>
+    <PtvsTargetsFile>$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets</PtvsTargetsFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="evaluate.py" />
+    <Compile Include="preprocessing\dwr.py" />
+    <Compile Include="preprocessing\squad_preprocess.py" />
+    <Compile Include="preprocessing\__init__.py" />
+    <Compile Include="qa_answer.py" />
+    <Compile Include="qa_data.py" />
+    <Compile Include="qa_model.py" />
+    <Compile Include="train.py" />
+    <Compile Include="__init__.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="download\dwr\glove.6B.100d.txt" />
+    <Content Include="download\dwr\glove.6B.200d.txt" />
+    <Content Include="download\dwr\glove.6B.300d.txt" />
+    <Content Include="download\dwr\glove.6B.50d.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="download\dwr" />
+    <Folder Include="preprocessing" />
+  </ItemGroup>
+  <Import Project="$(PtvsTargetsFile)" Condition="Exists($(PtvsTargetsFile))" />
+  <Import Project="$(MSBuildToolsPath)\Microsoft.Common.targets" Condition="!Exists($(PtvsTargetsFile))" />
+</Project>

@@ -34,6 +34,7 @@ def setup_args():
     parser.add_argument("--glove_dir", default=glove_dir)
     parser.add_argument("--vocab_dir", default=vocab_dir)
     parser.add_argument("--glove_dim", default=50, type=int)
+    parser.add_argument("--max_lenth", default=500, type=int)
     return parser.parse_args()
 
 
@@ -138,6 +139,55 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
                     token_ids = sentence_to_token_ids(line, vocab, tokenizer)
                     tokens_file.write(" ".join([str(tok) for tok in token_ids]) + "\n")
 
+def pad_sequences(data_to_token_ids, max_length):
+    """Ensures each input-output seqeunce pair in @data is of length
+    @max_length by padding it with zeros and truncating the rest of the
+    sequence.
+
+    TODO: In the code below, for every sentence, labels pair in @data,
+    (a) create a new sentence which appends zero feature vectors until
+    the sentence is of length @max_length. If the sentence is longer
+    than @max_length, simply truncate the sentence to be @max_length
+    long.
+    (b) create a new label sequence similarly.
+    (c) create a _masking_ sequence that has a True wherever there was a
+    token in the original sequence, and a False for every padded input.
+
+    Example: for the (sentence, labels) pair: [[4,1], [6,0], [7,0]], [1,
+    0, 0], and max_length = 5, we would construct
+        - a new sentence: [[4,1], [6,0], [7,0], [0,0], [0,0]]
+        - a new label seqeunce: [1, 0, 0, 4, 4], and
+        - a masking seqeunce: [True, True, True, False, False].
+
+    Args:
+        data: is a list of (sentence, labels) tuples. @sentence is a list
+            containing the words in the sentence and @label is a list of
+            output labels. Each word is itself a list of
+            @n_features features. For example, the sentence "Chris
+            Manning is amazing" and labels "PER PER O O" would become
+            ([[1,9], [2,9], [3,8], [4,8]], [1, 1, 4, 4]). Here "Chris"
+            the word has been featurized as "[1, 9]", and "[1, 1, 4, 4]"
+            is the list of labels. 
+        max_length: the desired length for all input/output sequences.
+    Returns:
+        a new list of data points of the structure (sentence', labels', mask).
+        Each of sentence', labels' and mask are of length @max_length.
+        See the example above for more details.
+    """
+    ret = []
+
+    # Use this zero vector when padding sequences. 
+
+    for sentence in data_to_token_ids:
+        sent = sentence[:]
+        mask = [True] * len(sent)
+        if len(sent) < max_length:
+            for i in range(len(sent), max_length):
+                sent.append(0)
+                mask.append(False)
+        
+        ret.append((sent[0:max_length],mask[0:max_length]))
+    return ret
 
 if __name__ == '__main__':
     args = setup_args()
@@ -167,8 +217,11 @@ if __name__ == '__main__':
     y_train_ids_path = train_path + ".ids.question"
     data_to_token_ids(train_path + ".context", x_train_dis_path, vocab_path)
     data_to_token_ids(train_path + ".question", y_train_ids_path, vocab_path)
+    
+    max_Length = args.max_length
 
     x_dis_path = valid_path + ".ids.context"
     y_ids_path = valid_path + ".ids.question"
     data_to_token_ids(valid_path + ".context", x_dis_path, vocab_path)
     data_to_token_ids(valid_path + ".question", y_ids_path, vocab_path)
+

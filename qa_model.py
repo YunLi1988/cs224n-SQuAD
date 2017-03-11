@@ -11,7 +11,7 @@ import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
 
 from evaluate import exact_match_score, f1_score
-
+from qa_data import pad_sequences
 logging.basicConfig(level=logging.INFO)
 
 
@@ -24,11 +24,38 @@ def get_optimizer(opt):
         assert (False)
     return optfn
 
+class Config:
+    """Holds model hyperparams and data information.
+
+    The config class is used to store various hyperparameters and dataset
+    information parameters. Model objects are passed a Config() object at
+    instantiation.
+    """
+    n_features = 1 # Number of features for every word in the input: vocab index
+    max_length = 500 # longest sequence to parse
+    n_classes = 2 # O or ANSWER
+    dropout = 0.5
+    embed_size = 100
+    hidden_size = 300
+    batch_size = 32
+    n_epochs = 10
+    max_grad_norm = 10.
+    lr = 0.001
+
+
 
 class Encoder(object):
-    def __init__(self, size, vocab_dim):
+    def __init__(self, size, vocab_dim, pretrained_embeddings):
         self.size = size
         self.vocab_dim = vocab_dim
+        self.pretrained_embeddings = pretrained_embeddings
+
+    def length(sequence):
+        used = tf.sign(tf.reduce_max(tf.abs(sequence), reduction_indices=2))
+        length = tf.reduce_sum(used, reduction_indices=1)
+        length = tf.cast(length, tf.int32)
+        return length
+
 
     def encode(self, inputs, masks, encoder_state_input):
         """
@@ -36,7 +63,7 @@ class Encoder(object):
         masks, and an initial
         hidden state input into this function.
 
-        :param inputs: Symbolic representations of your input
+        :param inputs: Symbolic representations of your input with shape = (batch_size, length/max_length, embed_size)
         :param masks: this is to make sure tf.nn.dynamic_rnn doesn't iterate
                       through masked steps
         :param encoder_state_input: (Optional) pass this as initial hidden state
@@ -45,8 +72,22 @@ class Encoder(object):
                  It can be context-level representation, word-level representation,
                  or both.
         """
+        initial_state_fw_cell = tf.slice(encoder_state_input, [0,0],[None,self.size/2])
+        initial_state_bw_cell = tf.slice(encoder_state_input, [0,self.size/2],[None,self.size/2])
+        output, state = tf.nn.bidirectional_dynamic_rnn(    
+                                            tf.nn.rnn_cell.LSTMCell(self.size),
+                                            tf.nn.rnn_cell.LSTMCell(self.size),
+                                            embeddings,
+                                            dtype=tf.float32,
+                                            sequence_length=length(inputs),
+                                            initial_state_fw= initial_state_fw_cell,
+                                            initial_state_bw= initial_state_bw_cell,
+                                            time_major = True
+                                            )
+    
+        
 
-        return
+        return state
 
 
 class Decoder(object):
