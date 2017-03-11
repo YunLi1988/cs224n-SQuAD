@@ -50,9 +50,11 @@ class Encoder(object):
         self.vocab_dim = vocab_dim
         self.pretrained_embeddings = pretrained_embeddings
 
-    def length(sequence):
-        used = tf.sign(tf.reduce_max(tf.abs(sequence), reduction_indices=2))
-        length = tf.reduce_sum(used, reduction_indices=1)
+    def length(masks):
+        """
+        :param masks: the mask tensor for batches of sequences. the masks tansor should be a zero-one vector
+        """
+        length = tf.reduce_sum(masks, reduction_indices=1)
         length = tf.cast(length, tf.int32)
         return length
 
@@ -77,12 +79,13 @@ class Encoder(object):
         initial_state_bw_cell = tf.slice(encoder_state_input, [0,cell_size],[-1,cell_size])
         cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
         cell_bw_srl = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
+        
         output, state = tf.nn.bidirectional_dynamic_rnn(    
                                             cell_fw,
                                             cell_bw,
                                             embeddings,
                                             dtype=tf.float32,
-                                            sequence_length=length(inputs),
+                                            sequence_length=length(masks),
                                             initial_state_fw= initial_state_fw_cell,
                                             initial_state_bw= initial_state_bw_cell,
                                             time_major = False
