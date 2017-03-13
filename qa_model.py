@@ -4,14 +4,19 @@ from __future__ import print_function
 
 import time
 import logging
+import pgb
 
 import numpy as np
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 from tensorflow.python.ops import variable_scope as vs
+from tensorflow.python.ops.nn import dynamic_rnn, bidirectional_dynamic_rnn
 
 from evaluate import exact_match_score, f1_score
-from qa_data import pad_sequences
+from qa_data import pad_sequences, get_chunks
+from util import ConfusionMatrix, Progbar, minibatches
+from defs import LBLS
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -33,7 +38,7 @@ class Config:
     """
     n_features = 1 # Number of features for every word in the input: vocab index
     max_length = 500 # longest sequence to parse
-    n_classes = 2 # O or ANSWER
+    n_classes = 3 # O or ANSWER or PAD
     dropout = 0.5
     embed_size = 100
     hidden_size = 300
@@ -43,6 +48,22 @@ class Config:
     lr = 0.001
 
 
+class LSTMAttnCell(tf.nn.rnn_cell.LSTMCell):
+    def _init_(self, num_units, encoder_output, scope=None):
+        self.hs = encoder_output
+        super(LSTMAttnCell,self).__init__(num_units)
+    
+    def __call__(self, inputs, state, scope=None):
+        lstm_out, lstm_state = super(LSTMAttnCell,self).__call__(inputs, state,scope)
+        with vs.variable_scope(scope or type(self).__name__):
+            with vs.variable_scope("Attn"):
+                ht = tf.nn.rnn_cell._linear(lstm_out, self._num_units, True, 1.0)
+                ht = tf.expand_dims(ht, axis=1)
+            scores = tf.reduce_sum(self.hs*ht, reduction_indices=2, keep_dims=True)
+            context = tf.reduce_sum(self.hs*scores, reduction_indices=1)
+            with vs.variable_scope("AttnConcat"):
+                out = tf.nn.relu(tf.nn.rnn_cell._linear([context, lstm_out], self._num_units, True, 1.0))
+        return (out, out)
 
 class Encoder(object):
     def __init__(self, size, vocab_dim, pretrained_embeddings):
@@ -50,16 +71,14 @@ class Encoder(object):
         self.vocab_dim = vocab_dim
         self.pretrained_embeddings = pretrained_embeddings
 
-    def length(masks):
-        """
-        :param masks: the mask tensor for batches of sequences. the masks tansor should be a zero-one vector
-        """
-        length = tf.reduce_sum(masks, reduction_indices=1)
+    def length(mask):
+        used = tf.cast(mask, tf.int32)
+        length = tf.reduce_sum(used, reduction_indices=1)
         length = tf.cast(length, tf.int32)
         return length
 
 
-    def encode(self, inputs, masks, encoder_state_input):
+    def encode_questions(self, inputs, masks, encoder_state_input):
         """
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
@@ -92,13 +111,34 @@ class Encoder(object):
                                             )
     
         
+        final_state = tf.concat(state,2)
+        prev = tf.concat(output,2)
+        return final_state, prev_states
+    
+    def encode_w_attn(self, inputs, masks, prev_states, scope="", reuse=False):
+        """
+        Run a BiLSTM over the context paragraph conditioned on the question representation.
+        """
+        self.attn_cell = LSTMAttnCell(self.size, prev_states)
+        with vs.variable_scope(scope, reuse):
+            o, _ = dynamic_rnn(self.attn_cell, inputs)
+    
 
-        return tf.concat(state,2)
 
 
 class Decoder(object):
     def __init__(self, output_size):
         self.output_size = output_size
+
+    def mix():
+        """
+        Calculate an attention vector over the context paragraph 
+        based on the question representation.
+        Make a new vector for each context paragraph position that 
+        combines the context-paragraph representation, 
+        the representation of the most aligned question word.
+        """
+        pass
 
     def decode(self, knowledge_rep):
         """
@@ -124,9 +164,16 @@ class QASystem(object):
         :param decoder: a decoder that you constructed in train.py
         :param args: pass in more arguments as needed
         """
-
+        self.encoder = encoder
+        self.decoder = decoder
+        
         # ==== set up placeholder tokens ========
-
+        config = Config()
+        self.max_length = config.max_length
+        self.input_placeholder = tf.placeholder(tf.int32, (None,self.max_length, config.n_features))
+        self.labels_placeholder = tf.placeholder(tf.int32, (None, self.max_length))
+        self.mask_placeholder = tf.placeholder(tf.bool, (None, self.max_length))
+        self.dropout_placeholder = tf.placeholder(tf.float32, ())
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
@@ -135,7 +182,7 @@ class QASystem(object):
             self.setup_loss()
 
         # ==== set up training/updating procedure ====
-        pass
+        
 
 
     def setup_system(self):
@@ -145,6 +192,7 @@ class QASystem(object):
         to assemble your reading comprehension system!
         :return:
         """
+        
         raise NotImplementedError("Connect all parts of your system here!")
 
 
@@ -171,7 +219,10 @@ class QASystem(object):
         :return:
         """
         input_feed = {}
-
+        if train_x is not None:
+            input_feed['train_x'] = train_x
+        if train_y is not None:
+            input_feed['train_y'] = train_y
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
 
@@ -303,3 +354,121 @@ class QASystem(object):
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
+
+class NERModel(Model):
+    """
+    Implements special functionality for NER models.
+    """
+
+    def __init__(self, helper, config, report=None):
+        self.helper = helper
+        self.config = config
+        self.report = report
+
+    def preprocess_sequence_data(self, examples):
+        """Preprocess sequence data for the model.
+
+        Args:
+            examples: A list of vectorized input/output sequences.
+        Returns:
+            A new list of vectorized input/output pairs appropriate for the model.
+        """
+        raise NotImplementedError("Each Model must re-implement this method.")
+
+    def consolidate_predictions(self, data_raw, data, preds):
+        """
+        Convert a sequence of predictions according to the batching
+        process back into the original sequence.
+        """
+        raise NotImplementedError("Each Model must re-implement this method.")
+
+
+    def evaluate(self, sess, examples, examples_raw):
+        """Evaluates model performance on @examples.
+
+        This function uses the model to predict labels for @examples and constructs a confusion matrix.
+
+        Args:
+            sess: the current TensorFlow session.
+            examples: A list of vectorized input/output pairs.
+            examples: A list of the original input/output sequence pairs.
+        Returns:
+            The F1 score for predicting tokens as named entities.
+        """
+        token_cm = ConfusionMatrix(labels=LBLS)
+
+        correct_preds, total_correct, total_preds = 0., 0., 0.
+        for _, labels, labels_  in self.output(sess, examples_raw, examples):
+            for l, l_ in zip(labels, labels_):
+                token_cm.update(l, l_)
+            gold = set(get_chunks(labels))
+            pred = set(get_chunks(labels_))
+            correct_preds += len(gold.intersection(pred))
+            total_preds += len(pred)
+            total_correct += len(gold)
+
+        p = correct_preds / total_preds if correct_preds > 0 else 0
+        r = correct_preds / total_correct if correct_preds > 0 else 0
+        f1 = 2 * p * r / (p + r) if correct_preds > 0 else 0
+        return token_cm, (p, r, f1)
+
+
+    def run_epoch(self, sess, train_examples, dev_set, train_examples_raw, dev_set_raw):
+        prog = Progbar(target=1 + int(len(train_examples) / self.config.batch_size))
+        for i, batch in enumerate(minibatches(train_examples, self.config.batch_size)):
+            loss = self.train_on_batch(sess, *batch)
+            prog.update(i + 1, [("train loss", loss)])
+            if self.report: self.report.log_train_loss(loss)
+        print("")
+
+        #logger.info("Evaluating on training data")
+        #token_cm, entity_scores = self.evaluate(sess, train_examples, train_examples_raw)
+        #logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
+        #logger.debug("Token-level scores:\n" + token_cm.summary())
+        #logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
+
+        logger.info("Evaluating on development data")
+        token_cm, entity_scores = self.evaluate(sess, dev_set, dev_set_raw)
+        logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
+        logger.debug("Token-level scores:\n" + token_cm.summary())
+        logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
+
+        f1 = entity_scores[-1]
+        return f1
+
+    def output(self, sess, inputs_raw, inputs=None):
+        """
+        Reports the output of the model on examples (uses helper to featurize each example).
+        """
+        if inputs is None:
+            inputs = self.preprocess_sequence_data(self.helper.vectorize(inputs_raw))
+
+        preds = []
+        prog = Progbar(target=1 + int(len(inputs) / self.config.batch_size))
+        for i, batch in enumerate(minibatches(inputs, self.config.batch_size, shuffle=False)):
+            # Ignore predict
+            batch = batch[:1] + batch[2:]
+            preds_ = self.predict_on_batch(sess, *batch)
+            preds += list(preds_)
+            prog.update(i + 1, [])
+        return self.consolidate_predictions(inputs_raw, inputs, preds)
+
+    def fit(self, sess, saver, train_examples_raw, dev_set_raw):
+        best_score = 0.
+
+        train_examples = self.preprocess_sequence_data(train_examples_raw)
+        dev_set = self.preprocess_sequence_data(dev_set_raw)
+
+        for epoch in range(self.config.n_epochs):
+            logger.info("Epoch %d out of %d", epoch + 1, self.config.n_epochs)
+            score = self.run_epoch(sess, train_examples, dev_set, train_examples_raw, dev_set_raw)
+            if score > best_score:
+                best_score = score
+                if saver:
+                    logger.info("New best score! Saving model in %s", self.config.model_output)
+                    saver.save(sess, self.config.model_output)
+            print("")
+            if self.report:
+                self.report.log_epoch()
+                self.report.save()
+        return best_score
