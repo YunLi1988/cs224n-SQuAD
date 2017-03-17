@@ -94,11 +94,13 @@ class Encoder(object):
                  or both.
         """
         cell_size = slef.size
+        inputs_shape = tf.shape(inputs)
+        batch_size = inputs_shape[0]
         initial_state_fw_cell = tf.slice(encoder_state_input, [0,0],[-1,cell_size])
         initial_state_bw_cell = tf.slice(encoder_state_input, [0,cell_size],[-1,cell_size])
         cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
         cell_bw_srl = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
-        
+        #state = tf.zeros([batch_size, cell_size])
         output, state = tf.nn.bidirectional_dynamic_rnn(    
                                             cell_fw,
                                             cell_bw,
@@ -122,23 +124,53 @@ class Encoder(object):
         self.attn_cell = LSTMAttnCell(self.size, prev_states)
         with vs.variable_scope(scope, reuse):
             o, _ = dynamic_rnn(self.attn_cell, inputs)
-    
+        return o
 
 
 
 class Decoder(object):
     def __init__(self, output_size):
         self.output_size = output_size
+        self.config = Config()
 
-    def mix():
-        """
-        Calculate an attention vector over the context paragraph 
-        based on the question representation.
-        Make a new vector for each context paragraph position that 
-        combines the context-paragraph representation, 
-        the representation of the most aligned question word.
-        """
-        pass
+    def match_LASTM(self,questions_states, paragraph_states, states):
+        input_size = tf.shape(questions_states)[2]
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=self.output_size, state_is_tuple=True)
+        W_q = tf.get_variable("W_q", shape=(input_size, input_size), initializer=tf.contrib.layers.xavier_initializer())
+        W_r = tf.get_variable("W_r", shape=(input_size, input_size), initializer=tf.contrib.layers.xavier_initializer())
+        b_p = tf.get_variable("b_p", shape=(1,input_size), initializer=tf.contrib.layers.xavier_initializer())
+        w = tf.get_variable("w", shape=(1, input_size), initializer=tf.contrib.layers.xavier_initializer())
+        b = tf.get_variable("b", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
+        state = tf.zeros([1, self.output_size])
+
+        with tf.variable_scope("Forward_Match-LSTM"):
+            for time_step in range(self.config.max_length):
+                p_state = paragraph_states[:,time_step,:]
+                G = tf.nn.tanh(tf.matmul(W_q, questions_states) + tf.mathmul(p_state,W_r) + tf.mathmul(state,W_r)+b_p)
+                atten = tf.matmul(w, G) + b
+                z = tf.concat([p_state, tf.mathmul(questions_states,tf.transpose(atten))],1)
+                state, h = cell(z, state, scope="Match-LSTM")
+                tf.get_variable_scope().reuse_variables()
+        fw_states = h
+
+        W_q = tf.get_variable("W_q", shape=(input_size, input_size), initializer=tf.contrib.layers.xavier_initializer())
+        W_r = tf.get_variable("W_r", shape=(input_size, input_size), initializer=tf.contrib.layers.xavier_initializer())
+        b_p = tf.get_variable("b_p", shape=(1,input_size), initializer=tf.contrib.layers.xavier_initializer())
+        w = tf.get_variable("w", shape=(1, input_size), initializer=tf.contrib.layers.xavier_initializer())
+        b = tf.get_variable("b", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
+        state = tf.zeros([1, self.output_size])
+        with tf.variable_scope("Backward_Match-LSTM"):
+            for time_step in reversed(range(self.config.max_length)):
+                p_state = paragraph_states[:,time_step,:]
+                G = tf.nn.tanh(tf.matmul(W_q, questions_states) + tf.mathmul(p_state,W_r) + tf.mathmul(state,W_r)+b_p)
+                atten = tf.matmul(w, G) + b
+                z = tf.concat([p_state, tf.mathmul(questions_states,tf.transpose(atten))],1)
+                state, h = cell(z, state, scope="Backward_Match-LSTM")
+                tf.get_variable_scope().reuse_variables()  
+        bk_states = h     
+        knowledge_rep =  tf.concat(0,[fw_states,bk_states])
+        return knowledge_rep
+
 
     def decode(self, knowledge_rep):
         """
@@ -220,9 +252,9 @@ class QASystem(object):
         """
         input_feed = {}
         if train_x is not None:
-            input_feed['train_x'] = train_x
+            input_feed[self.input_placeholder] = train_x
         if train_y is not None:
-            input_feed['train_y'] = train_y
+            input_feed[self.labels_placeholder] = train_y
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
 
