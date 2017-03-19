@@ -19,7 +19,7 @@ tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped o
 tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
-tf.app.flags.DEFINE_integer("question_size", 100, "The output size of your model.")
+tf.app.flags.DEFINE_integer("question_size", 100, "The max size of questions.")
 tf.app.flags.DEFINE_integer("output_size", 766, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
@@ -118,9 +118,11 @@ def main(FLAGS):
     embed_path = FLAGS.embed_path or pjoin("data", "squad", "glove.trimmed.{}.npz".format(FLAGS.embedding_size))
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
     vocab, rev_vocab = initialize_vocab(vocab_path)
+    print ("Loading Embedding Matrix")
     embeddings = np.load(embed_path)['glove']
+
     
-    encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
+    encoder = Encoder(size=FLAGS.question_size, vocab_dim=FLAGS.embedding_size)
     decoder = Decoder(output_size=FLAGS.output_size)
 
     qa = QASystem(encoder, decoder, FLAGS, embeddings)
@@ -136,19 +138,16 @@ def main(FLAGS):
 
     with tf.Session() as sess:
         load_train_dir = get_normalized_train_dir(FLAGS.load_train_dir or FLAGS.train_dir)
+        print ("Building Network ... ")
         initialize_model(sess, qa, load_train_dir)
         save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
-        print (80 * "=")
-        print ("Load Training Data")
-        print (80 * "=")        
+        print ("Load Training Data")  
         dataset = initialize_datasets(FLAGS.data_dir, dataset='train', debugMode=True)
         print (80 * "=")
         print ("Training")
         print (80 * "=")
         qa.train(sess, dataset, save_train_dir)
-        print (80 * "=")
         print ("Finished Training")
-        print (80 * "=")
         print ("Load Validation Data")
         dataset = initialize_datasets(FLAGS.data_dir, dataset='val', debugMode=True)
         print (80 * "=")
