@@ -34,10 +34,10 @@ def get_optimizer(opt):
 class LSTMAttnCell(tf.nn.rnn_cell.LSTMCell):
     def _init_(self, num_units, encoder_output, scope=None):
         self.hs = encoder_output
-        super(LSTMAttnCell,self).__init__(num_units)
+        super(LSTMAttnCell,self).__init__(num_units,encoder_output, scope)
     
     def __call__(self, inputs, state, scope=None):
-        lstm_out, lstm_state = super(LSTMAttnCell,self).__call__(inputs, state,scope)
+        lstm_out, lstm_state = super(LSTMAttnCell,self).__call__(inputs, state, scope)
         with vs.variable_scope(scope or type(self).__name__):
             with vs.variable_scope("Attn"):
                 ht = tf.nn.rnn_cell._linear(lstm_out, self._num_units, True, 1.0)
@@ -80,38 +80,48 @@ class Encoder(object):
         cell_size = self.size
         inputs_shape = tf.shape(inputs)
         batch_size = inputs_shape[0]
-        initial_state_fw_cell = tf.slice(encoder_state_input, [0,0],[-1,cell_size])
-        initial_state_bw_cell = tf.slice(encoder_state_input, [0,cell_size],[-1,cell_size])
+        #initial_state_fw_cell = tf.slice(encoder_state_input, [0,0],[-1,cell_size])
+        #initial_state_bw_cell = tf.slice(encoder_state_input, [0,cell_size],[-1,cell_size])
         #cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
         #cell_bw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
         cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
         cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
-        #state = tf.zeros([batch_size, cell_size])
+
         with tf.variable_scope("bi_LSTM"):
-            output, state = tf.nn.bidirectional_dynamic_rnn(    
+            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(    
                                             cell_fw,
                                             cell_bw,
                                             dtype=tf.float32,
                                             sequence_length=self.length(masks),
                                             inputs= inputs,
-                                            initial_state_fw= initial_state_fw_cell,
-                                            initial_state_bw= initial_state_bw_cell,
                                             time_major = False
                                             )
     
         
-        final_state = tf.concat(state,2)
-        prev = tf.concat(output,2)
-        return final_state, prev_states
+        final_state = tf.concat(2, final_state)
+        states = tf.concat(2, outputs)
+        return final_state, states
     
     def encode_w_attn(self, inputs, masks, prev_states, scope="", reuse=False):
         """
         Run a BiLSTM over the context paragraph conditioned on the question representation.
         """
-        self.attn_cell = LSTMAttnCell(self.size, prev_states)
+        self.attn_cell_fw = LSTMAttnCell(self.size, prev_states)
+        self.attn_cell_bw = LSTMAttnCell(self.size, prev_states)
         with vs.variable_scope(scope, reuse):
-            o, states = dynamic_rnn(self.attn_cell, inputs)
-        return o, states
+            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(    
+                                            self.attn_cell_fw,
+                                            self.attn_cell_bw,
+                                            dtype=tf.float32,
+                                            sequence_length=self.length(masks),
+                                            inputs= inputs,
+                                            time_major = False             
+                                            )
+    
+        
+        final_state = tf.concat(2, final_state)
+        states = tf.concat(2, outputs)
+        return final_state, states
 
 
 
@@ -224,12 +234,13 @@ class QASystem(object):
         # ==== set up placeholder tokens ========
         self.p_max_length = decoder.output_size
         self.embed_size = encoder.vocab_dim
-        self.q_max_length = self.config.question_length
+        self.q_max_length = self.config.question_size
         self.q_placeholder = tf.placeholder(tf.int32, (None,self.q_max_length))
         self.p_placeholder = tf.placeholder(tf.int32, (None,self.p_max_length))    
         self.start_labels_placeholder = tf.placeholder(tf.int32, (None, self.p_max_length))
         self.end_labels_placeholder = tf.placeholder(tf.int32, (None, self.p_max_length))
         self.q_mask_placeholder = tf.placeholder(tf.bool, (None, self.q_max_length))
+        self.p_mask_placeholder = tf.placeholder(tf.bool, (None, self.p_max_length))
         self.dropout_placeholder = tf.placeholder(tf.float32, ())
 
         # ==== assemble pieces ====
@@ -251,7 +262,7 @@ class QASystem(object):
         :return:
         """
         encoded_q, self.q_states= self.encoder.encode_questions(self.q_embeddings, self.q_mask_placeholder, None)
-        encoded_p, self.p_states = self.encoder.encode_w_attn(self.p_embeddings, self.p_mask_placeholder, q_states, scope="", reuse=False)
+        encoded_p, self.p_states = self.encoder.encode_w_attn(self.p_embeddings, self.p_mask_placeholder, self.q_states, scope="", reuse=False)
         
         self.knowledge_rep = self.decoder.match_LASTM(self.q_states,self.p_states)
 
@@ -274,8 +285,9 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("embeddings"):
+            self.pretrained_embeddings = tf.Variable(self.pretrained_embeddings, trainable=False, dtype=tf.float32)
             q_embeddings = tf.nn.embedding_lookup(self.pretrained_embeddings, self.q_placeholder)
-            self.q_embeddings = tf.reshape(q_embeddings, shape = [-1, self.config.output_size, 1* self.embed_size])
+            self.q_embeddings = tf.reshape(q_embeddings, shape = [-1, self.config.question_size, 1* self.embed_size])
             p_embeddings = tf.nn.embedding_lookup(self.pretrained_embeddings, self.p_placeholder)
             self.p_embeddings = tf.reshape(p_embeddings, shape = [-1, self.config.output_size, 1* self.embed_size])
 
