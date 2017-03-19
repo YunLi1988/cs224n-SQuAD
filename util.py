@@ -23,6 +23,7 @@ logger = logging.getLogger("hw3")
 logger.setLevel(logging.DEBUG)
 logging.basicConfig(format='%(levelname)s:%(message)s', level=logging.DEBUG)
 
+
 def read_conll(fstream):
     """
     Reads a input stream @fstream (e.g. output of `open(fname, 'r')`) in CoNLL file format.

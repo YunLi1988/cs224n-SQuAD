@@ -4,9 +4,8 @@ from __future__ import print_function
 
 import os
 import json
-
+import numpy as np
 import tensorflow as tf
-
 from qa_model import Encoder, QASystem, Decoder
 from os.path import join as pjoin
 
@@ -20,7 +19,7 @@ tf.app.flags.DEFINE_float("dropout", 0.15, "Fraction of units randomly dropped o
 tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training.")
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
-tf.app.flags.DEFINE_integer("output_size", 750, "The output size of your model.")
+tf.app.flags.DEFINE_integer("output_size", 766, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
@@ -33,7 +32,6 @@ tf.app.flags.DEFINE_string("vocab_path", "data/squad/vocab.dat", "Path to vocab 
 tf.app.flags.DEFINE_string("embed_path", "", "Path to the trimmed GLoVe embedding (default: ./data/squad/glove.trimmed.{embedding_size}.npz)")
 
 FLAGS = tf.app.flags.FLAGS
-
 
 def initialize_model(session, model, train_dir):
     ckpt = tf.train.get_checkpoint_state(train_dir)
@@ -76,19 +74,24 @@ def get_normalized_train_dir(train_dir):
     return global_train_dir
 
 
-def main(_):
-
+def main(FLAGS):
+    print (80 * "=")
+    print ("INITIALIZING")
+    print (80 * "=")
     # Do what you need to load datasets from FLAGS.data_dir
-    dataset = None
-
+    dataset = None 
+    #parser, embeddings, train_examples, dev_set, test_set = load_and_preprocess_data(debug)
+    if not os.path.exists('./data/weights/'):
+        os.makedirs('./data/weights/')
     embed_path = FLAGS.embed_path or pjoin("data", "squad", "glove.trimmed.{}.npz".format(FLAGS.embedding_size))
     vocab_path = FLAGS.vocab_path or pjoin(FLAGS.data_dir, "vocab.dat")
     vocab, rev_vocab = initialize_vocab(vocab_path)
-
+    embeddings = np.load(embed_path)['glove']
+    
     encoder = Encoder(size=FLAGS.state_size, vocab_dim=FLAGS.embedding_size)
     decoder = Decoder(output_size=FLAGS.output_size)
 
-    qa = QASystem(encoder, decoder)
+    qa = QASystem(encoder, decoder, FLAGS, embeddings)
 
     if not os.path.exists(FLAGS.log_dir):
         os.makedirs(FLAGS.log_dir)
@@ -108,5 +111,8 @@ def main(_):
 
         qa.evaluate_answer(sess, dataset, vocab, FLAGS.evaluate, log=True)
 
-if __name__ == "__main__":
-    tf.app.run()
+if __name__ == '__main__':
+    main(FLAGS)
+
+#if __name__ == "__main__":
+#   tf.app.run()
