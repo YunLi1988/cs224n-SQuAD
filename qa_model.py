@@ -15,7 +15,6 @@ from tensorflow.python.ops.nn import dynamic_rnn, bidirectional_dynamic_rnn
 from evaluate import exact_match_score, f1_score
 from util import ConfusionMatrix, Progbar, minibatches, get_minibatches
 from defs import LBLS
-from qa_data import PAD_ID
 
 logging.basicConfig(level=logging.INFO)
 
@@ -30,64 +29,7 @@ def get_optimizer(opt):
     return optfn
 
 
-def pad_sequences(data, max_length):
-    """Ensures each input-output seqeunce pair in @data is of length
-    @max_length by padding it with zeros and truncating the rest of the
-    sequence.
 
-    TODO: In the code below, for every sentence, labels pair in @data,
-    (a) create a new sentence which appends zero feature vectors until
-    the sentence is of length @max_length. If the sentence is longer
-    than @max_length, simply truncate the sentence to be @max_length
-    long.
-    (b) create a new label sequence similarly.
-    (c) create a _masking_ sequence that has a True wherever there was a
-    token in the original sequence, and a False for every padded input.
-
-    Example: for the (sentence, labels) pair: [[4,1], [6,0], [7,0]], [1,
-    0, 0], and max_length = 5, we would construct
-        - a new sentence: [[4,1], [6,0], [7,0], [0,0], [0,0]]
-        - a new label seqeunce: [1, 0, 0, 4, 4], and
-        - a masking seqeunce: [True, True, True, False, False].
-
-    Args:
-        data: is a list of (sentence, labels) tuples. @sentence is a list
-            containing the words in the sentence and @label is a list of
-            output labels. Each word is itself a list of
-            @n_features features. For example, the sentence "Chris
-            Manning is amazing" and labels "PER PER O O" would become
-            ([[1,9], [2,9], [3,8], [4,8]], [1, 1, 4, 4]). Here "Chris"
-            the word has been featurized as "[1, 9]", and "[1, 1, 4, 4]"
-            is the list of labels. 
-        max_length: the desired length for all input/output sequences.
-    Returns:
-        a new list of data points of the structure (sentence', labels', mask).
-        Each of sentence', labels' and mask are of length @max_length.
-        See the example above for more details.
-    """
-    ret = {}
-    ret['Questions'] = []
-    ret['Paragraphs'] = [] 
-    ret['Labels']= data['Labels']
-    for iq in range(len(data['Questions'])):
-        q = data['Questions'][iq]
-        q_sent = q[:]
-        q_mask = [True] * len(q_sent)
-        if len(q_sent) < max_length:
-            for i in range(len(q_sent), max_length):
-                q_sent.append(PAD_ID)
-                q_mask.append(False)
-        ret['Questions'].append((q_sent[0:max_length], q_mask[0:max_length]))
-    for ip in range(len(data['Paragraphs'])):
-        p = data['Questions'][ip]
-        p_sent = q[:]
-        p_mask = [True] * len(p_sent)
-        if len(p_sent) < max_length:
-            for i in range(len(p_sent), max_length):
-                p_sent.append(PAD_ID)
-                p_mask.append(False)
-        ret['Paragraphs'].append((p_sent[0:max_length],p_mask[0:max_length]))   
-    return ret
 
 class LSTMAttnCell(tf.nn.rnn_cell.LSTMCell):
     def _init_(self, num_units, encoder_output, scope=None):
@@ -140,8 +82,10 @@ class Encoder(object):
         batch_size = inputs_shape[0]
         initial_state_fw_cell = tf.slice(encoder_state_input, [0,0],[-1,cell_size])
         initial_state_bw_cell = tf.slice(encoder_state_input, [0,cell_size],[-1,cell_size])
-        cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
-        cell_bw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
+        #cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
+        #cell_bw = tf.nn.rnn_cell.LSTMCell(num_units=cell_size, state_is_tuple=True)
+        cell_fw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
+        cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
         #state = tf.zeros([batch_size, cell_size])
         with tf.variable_scope("bi_LSTM"):
             output, state = tf.nn.bidirectional_dynamic_rnn(    
@@ -280,7 +224,7 @@ class QASystem(object):
         # ==== set up placeholder tokens ========
         self.p_max_length = decoder.output_size
         self.embed_size = encoder.vocab_dim
-        self.q_max_length = decoder.output_size
+        self.q_max_length = self.config.question_length
         self.q_placeholder = tf.placeholder(tf.int32, (None,self.q_max_length))
         self.p_placeholder = tf.placeholder(tf.int32, (None,self.p_max_length))    
         self.start_labels_placeholder = tf.placeholder(tf.int32, (None, self.p_max_length))
@@ -343,14 +287,14 @@ class QASystem(object):
         """
         input_feed = {}
         if train_x is not None:
-            input_feed[self.q_placeholder] = dataset['Questions'][0]
-            input_feed[self.p_placeholder] = dataset['Paragraphs'][0]
+            input_feed[self.q_placeholder] = dataset['Questions']
+            input_feed[self.p_placeholder] = dataset['Paragraphs']
         if train_y is not None:
             input_feed[self.start_labels_placeholder] = dataset['Labels'][:,0]
             input_feed[self.end_labels_placeholder] = dataset['Labels'][:,1]
         if mask is not None:
-            input_feed[self.q_mask_placeholder] = dataset['Questions'][1]
-            input_feed[self.p_mask_placeholder] = dataset['Paragraphs'][1]
+            input_feed[self.q_mask_placeholder] = dataset['Questions_masks']
+            input_feed[self.p_mask_placeholder] = dataset['Paragraphs_masks']
         input_feed[self.dropout_placeholder] = dropout
         # fill in this feed_dictionary like:
         # input_feed['train_x'] = train_x
@@ -391,11 +335,11 @@ class QASystem(object):
         """
         input_feed = {}
         if train_x is not None:
-            input_feed[self.q_placeholder] = train_x[:,0]
-            input_feed[self.p_placeholder] = train_x[:,1]
+            input_feed[self.q_placeholder] = train_x['Questions']
+            input_feed[self.p_placeholder] = train_x['Paragraphs']
         if mask is not None:
-            input_feed[self.q_mask_placeholder] = mask[:,0]
-            input_feed[self.p_mask_placeholder] = mask[:,1]
+            input_feed[self.q_mask_placeholder] = train_x['Questions_masks']
+            input_feed[self.p_mask_placeholder] = train_x['Paragraphs_masks']
         # fill in this feed_dictionary like:
         #input_feed['test_x'] = test_x
         
@@ -458,7 +402,7 @@ class QASystem(object):
                     self.report.save()
             return best_score
     def run_epoch(self, sess, train_examples, dev_set, train_examples_raw, dev_set_raw):
-        prog = Progbar(target=1 + int(len(train_examples) / self.config.batch_size))
+        prog = Progbar(target=1 + int(len(train_examples['Paragraphs_masks']) / self.config.batch_size))
         for i, batch in enumerate(minibatches(train_examples, self.config.batch_size)):
             loss = self.train_on_batch(sess, *batch)
             prog.update(i + 1, [("train loss", loss)])
@@ -525,8 +469,10 @@ class QASystem(object):
         examples = {}
         examples['Questions'] = dataset['Questions'][idx_sample]
         examples['Paragraphs'] = dataset['Paragraphs'][idx_sample] 
+        examples['Questions_masks'] = dataset['Questions'][idx_sample]
+        examples['Paragraphs_masks'] = dataset['Paragraphs'][idx_sample]
         examples['Labels'] = dataset['Labels'][idx_sample] 
-        examples = pad_sequences(examples,self.p_max_length) 
+        
         correct_preds, total_correct, total_preds = 0., 0., 0.
         for _, labels, labels_  in self.answer(sess, examples, masks):
             pred = set()
@@ -577,7 +523,7 @@ class QASystem(object):
         # you will also want to save your model parameters in train_dir
         # so that you can use your trained model to make predictions, or
         # even continue training
-
+ 
         tic = time.time()
         params = tf.trainable_variables()
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
