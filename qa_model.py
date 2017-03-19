@@ -139,12 +139,13 @@ class Decoder(object):
     def match_LASTM(self,questions_states, paragraph_states):
         input_size = tf.shape(questions_states)[2]
         cell = tf.nn.rnn_cell.LSTMCell(num_units=self.output_size, state_is_tuple=True)
-        W_q = tf.get_variable("W_q", shape=(input_size, input_size), initializer=tf.contrib.layers.xavier_initializer())
-        W_r = tf.get_variable("W_r", shape=(input_size, input_size), initializer=tf.contrib.layers.xavier_initializer())
-        b_p = tf.get_variable("b_p", shape=(1,input_size), initializer=tf.contrib.layers.xavier_initializer())
-        w = tf.get_variable("w", shape=(1, input_size), initializer=tf.contrib.layers.xavier_initializer())
-        b = tf.get_variable("b", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
-        state = tf.zeros([1, self.output_size])
+        with tf.variable_scope("Forward_Match-LSTM") as scope:
+            W_q = tf.get_variable("W_q", shape=(input_size, input_size), initializer=tf.contrib.layers.xavier_initializer())
+            W_r = tf.get_variable("W_r", shape=(input_size, input_size), initializer=tf.contrib.layers.xavier_initializer())
+            b_p = tf.get_variable("b_p", shape=(1,input_size), initializer=tf.contrib.layers.xavier_initializer())
+            w = tf.get_variable("w", shape=(1, input_size), initializer=tf.contrib.layers.xavier_initializer())
+            b = tf.get_variable("b", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
+            state = tf.zeros([1, self.output_size])
 
         with tf.variable_scope("Forward_Match-LSTM"):
             for time_step in range(self.output_size):
