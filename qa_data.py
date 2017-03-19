@@ -140,6 +140,56 @@ def data_to_token_ids(data_path, target_path, vocabulary_path,
                     token_ids = sentence_to_token_ids(line, vocab, tokenizer)
                     tokens_file.write(" ".join([str(tok) for tok in token_ids]) + "\n")
 
+def pad_sequences(data, p_length, q_length):
+    """Ensures each input-output seqeunce pair in @data is of length
+    @max_length by padding it with zeros and truncating the rest of the
+    sequence.
+    Args:
+        data: is a list of (sentence, labels) tuples. @sentence is a list
+            containing the words in the sentence and @label is a list of
+            output labels. Each word is itself a list of
+            @n_features features. 
+        max_length: the desired length for all input/output sequences.
+    Returns:
+        a new list of data points of the structure (sentence', labels', mask).
+        Each of sentence', labels' and mask are of length @max_length.
+        See the example above for more details.
+    """
+    ret = {}
+    ret['Questions'] = []
+    ret['Questions_masks'] = []
+    ret['Paragraphs'] = [] 
+    ret['Paragraphs_masks'] = []
+
+    for iq in range(len(data['Questions'])):
+        q = data['Questions'][iq]
+        q_sent = q[:]
+        q_mask = [True] * len(q_sent)
+        if len(q_sent) < q_length:
+            for i in range(len(q_sent), q_length):
+                q_sent.append(PAD_ID)
+                q_mask.append(False)
+        ret['Questions'].append([q_sent[0:q_length]])
+        ret['Questions_masks'].append([q_mask[0:q_length]])
+    for ip in range(len(data['Paragraphs'])):
+        p = data['Questions'][ip]
+        p_sent = q[:]
+        p_mask = [True] * len(p_sent)
+        if len(p_sent) < p_length:
+            for i in range(len(p_sent), p_length):
+                p_sent.append(PAD_ID)
+                p_mask.append(False)
+        ret['Paragraphs'].append([p_sent[0:p_length]])
+        ret['Paragraphs_masks'].append([p_mask[0:p_length]])
+
+    num_examples = len(ret['Questions'])
+    ret['Questions'] = np.array(ret['Questions']).reshape((num_examples,q_length))
+    ret['Questions_masks'] = np.array(ret['Questions_masks']).reshape((num_examples,q_length))
+    ret['Paragraphs'] = np.array(ret['Paragraphs']).reshape((num_examples,p_length)) 
+    ret['Paragraphs_masks'] = np.array(ret['Paragraphs_masks']).reshape((num_examples,p_length)) 
+    ret['Labels']= np.array(data['Labels']).reshape((num_examples,2))      
+    return ret
+
 
 if __name__ == '__main__':
     args = setup_args()
