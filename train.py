@@ -20,7 +20,8 @@ tf.app.flags.DEFINE_integer("batch_size", 10, "Batch size to use during training
 tf.app.flags.DEFINE_integer("epochs", 10, "Number of epochs to train.")
 tf.app.flags.DEFINE_integer("state_size", 200, "Size of each model layer.")
 tf.app.flags.DEFINE_integer("question_size", 100, "The max size of questions.")
-tf.app.flags.DEFINE_integer("output_size", 766, "The output size of your model.")
+tf.app.flags.DEFINE_integer("paragraph_size", 766, "The output size of your model.")
+tf.app.flags.DEFINE_integer("output_size", 100, "The output size of your model.")
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
@@ -122,7 +123,7 @@ def main(FLAGS):
     embeddings = np.load(embed_path)['glove']
 
     
-    encoder = Encoder(size=FLAGS.question_size, vocab_dim=FLAGS.embedding_size)
+    encoder = Encoder(size=FLAGS.output_size, vocab_dim=FLAGS.embedding_size)
     decoder = Decoder(output_size=FLAGS.output_size)
 
     qa = QASystem(encoder, decoder, FLAGS, embeddings)
