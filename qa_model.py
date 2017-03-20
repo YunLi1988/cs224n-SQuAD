@@ -161,7 +161,7 @@ class Decoder(object):
                 tf.get_variable_scope().reuse_variables()
         fw_states = tf.pack(fw_states)
         fw_states = tf.transpose(fw_states, perm=(1,0,2))
-        cell = tf.nn.rnn_cell.BasicLSTMCell(num_units=self.output_size)
+        cell = tf.nn.rnn_cell.BasicLSTMCell(num_units=self.output_size, state_is_tuple=False)
         bw_states = []
         with tf.variable_scope("Backward_Match-LSTM"):
             W_q = tf.get_variable("W_q", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -203,7 +203,7 @@ class Decoder(object):
         """
         output_size = self.output_size
         # predict start index
-        cell = tf.nn.rnn_cell.LSTMCell(num_units=output_size)
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=output_size, state_is_tuple=False)
         V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
         b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
         W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -224,14 +224,15 @@ class Decoder(object):
                 tf.get_variable_scope().reuse_variables()
         beta_s = tf.pack(beta_s)
         beta_s = tf.transpose(beta_s, perm=(1,0,2)) 
+
         # predict end index; beta_e is the probability distribution over the paragraph words
-        cell = tf.nn.rnn_cell.LSTMCell(num_units=input_size, state_is_tuple=True)
-        V = tf.get_variable("V", shape=(input_size/2, input_size), initializer=tf.contrib.layers.xavier_initializer())
-        b_a = tf.get_variable("b_a", shape=(input_size/2,1), initializer=tf.contrib.layers.xavier_initializer())
-        W_a = tf.get_variable("W_a", shape=(input_size/2, input_size/2), initializer=tf.contrib.layers.xavier_initializer())
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=input_size, state_is_tuple= False)
+        V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
+        b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
+        W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
         c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
-        v = tf.get_variable("v", shape=(1,input_size/2), initializer=tf.contrib.layers.xavier_initializer())
-        state = tf.zeros([input_size, 1])
+        v = tf.get_variable("v", shape=(input_size,1), initializer=tf.contrib.layers.xavier_initializer())
+        state = tf.zeros([1, output_size])
 
         with tf.variable_scope("Boundary-LSTM_end"):
             for time_step in range(self.output_size):
@@ -246,7 +247,6 @@ class Decoder(object):
                 tf.get_variable_scope().reuse_variables()
         beta_e = tf.pack(beta_e)
         beta_e = tf.transpose(beta_e, perm=(1,0,2)) 
-
         return beta_s, beta_e
 
 
