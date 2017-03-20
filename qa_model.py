@@ -305,6 +305,7 @@ class QASystem(object):
         """
         preds_s = np.array(preds[0])
         preds_e = np.array(preds[1])
+
         with vs.variable_scope("start_index_loss"):  
             loss_tensor = tf.boolean_mask(tf.nn.sparse_softmax_cross_entropy_with_logits(preds_s, self.start_labels_placeholder),self.p_mask_placeholder)
             start_index_loss = tf.reduce_mean(loss_tensor, 0)
@@ -545,3 +546,4 @@ class QASystem(object):
             print("")
 
         return best_score
+
