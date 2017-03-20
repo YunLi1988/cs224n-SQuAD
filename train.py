@@ -122,10 +122,11 @@ def main(FLAGS):
     print ("Loading Embedding Matrix")
     embeddings = np.load(embed_path)['glove']
 
-    
+    print ("Setting up the Encoder")
     encoder = Encoder(size=FLAGS.output_size, vocab_dim=FLAGS.embedding_size)
+    print ("Setting up the Decoder")
     decoder = Decoder(output_size=FLAGS.output_size)
-
+    print ("Setting up the QA system")
     qa = QASystem(encoder, decoder, FLAGS, embeddings)
 
     if not os.path.exists(FLAGS.log_dir):
