@@ -137,7 +137,8 @@ class Decoder(object):
         self.output_size = 2*output_size
 
     def match_LASTM(self,questions_states, paragraph_states, question_length):
-        cell = tf.nn.rnn_cell.BasicLSTMCell(num_units=self.output_size)
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=self.output_size, state_is_tuple=False)
+        fw_states = []
         with tf.variable_scope("Forward_Match-LSTM"):
             W_q = tf.get_variable("W_q", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
             W_r = tf.get_variable("W_r", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -156,9 +157,12 @@ class Decoder(object):
                 p_z = tf.reshape(p_z, [-1, self.output_size])
                 z = tf.concat(1,[p_state, p_z])
                 _, state = cell(z, state)
+                fw_states.append(state)
                 tf.get_variable_scope().reuse_variables()
-        fw_states = h
+        fw_states = tf.pack(fw_states)
+        fw_states = tf.transpose(fw_states, perm=(1,0,2))
         cell = tf.nn.rnn_cell.BasicLSTMCell(num_units=self.output_size)
+        bw_states = []
         with tf.variable_scope("Backward_Match-LSTM"):
             W_q = tf.get_variable("W_q", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
             W_r = tf.get_variable("W_r", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -171,15 +175,17 @@ class Decoder(object):
                 X_ = tf.reshape(questions_states, [-1, self.output_size])
                 G = tf.nn.tanh(tf.matmul(X_,W_q) + tf.matmul(p_state,W_r) + tf.matmul(state,W_r)+b_p) #batch_size*Q,l
                 atten = tf.nn.softmax(tf.matmul(G, w) + b) #batch_size*Q,1
-                atten = tf.reshape(atten, [-1, 1, 100])
-                X_ = tf.reshape(questions_states, [-1, 100, self.output_size])
+                atten = tf.reshape(atten, [-1, 1, question_length])
+                X_ = tf.reshape(questions_states, [-1, question_length, self.output_size])
                 p_z = tf.matmul(atten, X_)
                 p_z = tf.reshape(p_z, [-1, self.output_size])
                 z = tf.concat(1,[p_state, p_z])
                 _, state = cell(z, state)
+                bk_states.append(state )
                 tf.get_variable_scope().reuse_variables() 
-        bk_states = h     
-        knowledge_rep =  tf.concat(1,[fw_states,bk_states])
+        bw_states = tf.pack(fw_states)
+        bw_states = tf.transpose(bw_states, perm=(1,0,2))            
+        knowledge_rep =  tf.concat(2,[bw_states,bk_states])
         return knowledge_rep
 
 
@@ -195,25 +201,29 @@ class Decoder(object):
                               decided by how you choose to implement the encoder
         :return:
         """
-        output_size = 2*self.output_size
-        paragraph_len = tf.shape(knowledge_rep)[1]
+        output_size = self.output_size
         # predict start index
         cell = tf.nn.rnn_cell.LSTMCell(num_units=output_size)
-        V = tf.get_variable("V", shape=(output_size, 2*output_size), initializer=tf.contrib.layers.xavier_initializer())
-        b_a = tf.get_variable("b_a", shape=(output_size,1), initializer=tf.contrib.layers.xavier_initializer())
+        V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
+        b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
         W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
         c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
         v = tf.get_variable("v", shape=(input_size,1), initializer=tf.contrib.layers.xavier_initializer())
-        state = tf.zeros([1,2*output_size])
-
+        state = tf.zeros([1, output_size])
+        beta_s = []    
         with tf.variable_scope("Boundary-LSTM_start"):
             for time_step in range(self.output_size):
-                F_s = tf.nn.tanh(tf.matmul(V, knowledge_rep) + tf.mathmul(W_a,state) +b_a)
-                beta_s = tf.nn.softmax(tf.matmul(v, F_s) + c)
-                z = tf.mathmul(knowledge_rep,tf.transpose(beta))
-                state, h = cell(z, state, scope="Boundary-LSTM_start")
+                H_r = tf.reshape(knowledge_rep, [-1, 2*output_size])
+                F_s = tf.nn.tanh(tf.matmul(knowledge_rep, V) + tf.mathmul(state, W_a) +b_a)
+                probab_s = tf.reshape(tf.nn.softmax(tf.matmul(F_s, v) + c), shape=[-1, paragraph_length])
+                beta_s.append(probab_s)
+                attn = tf.reshape(probab_e, [-1, 1, paragraph_length])
+                H_r = tf.reshape(questions_states, [-1, paragraph_length, 2*self.output_size])
+                z = tf.matmul(atten, H_r)
+                _, state = cell(z, state, scope="Boundary-LSTM_start")
                 tf.get_variable_scope().reuse_variables()
-
+        beta_s = tf.pack(beta_s)
+        beta_s = tf.transpose(beta_s, perm=(1,0,2)) 
         # predict end index; beta_e is the probability distribution over the paragraph words
         cell = tf.nn.rnn_cell.LSTMCell(num_units=input_size, state_is_tuple=True)
         V = tf.get_variable("V", shape=(input_size/2, input_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -225,11 +235,18 @@ class Decoder(object):
 
         with tf.variable_scope("Boundary-LSTM_end"):
             for time_step in range(self.output_size):
-                F_e = tf.nn.tanh(tf.matmul(V, knowledge_rep) + tf.mathmul(W_a,state) +b_a)
-                beta_e = tf.nn.softmax(tf.matmul(v, F_e) + c)
-                z = tf.mathmul(knowledge_rep,tf.transpose(beta))
-                state, h = cell(z, state, scope="Boundary-LSTM_")
+                H_r = tf.reshape(knowledge_rep, [-1, 2*output_size])
+                F_e = tf.nn.tanh(tf.matmul(knowledge_rep, V) + tf.mathmul(state, W_a) +b_a)
+                probab_e = tf.reshape(tf.nn.softmax(tf.matmul(F_e, v) + c), shape=[-1, paragraph_length])
+                beta_e.append(probab_e)
+                attn = tf.reshape(probab_e, [-1, 1, paragraph_length])
+                H_r = tf.reshape(questions_states, [-1, paragraph_length, 2*self.output_size])
+                z = tf.matmul(atten, H_r)
+                _, state = cell(z, state, scope="Boundary-LSTM_start")
                 tf.get_variable_scope().reuse_variables()
+        beta_e = tf.pack(beta_e)
+        beta_e = tf.transpose(beta_e, perm=(1,0,2)) 
+
         return beta_s, beta_e
 
 
