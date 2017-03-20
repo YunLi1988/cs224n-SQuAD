@@ -5,7 +5,7 @@ from __future__ import print_function
 import time
 import logging
 import os
-from datatime import datetime
+from datetime import datetime
 #import pgb
 
 import numpy as np
@@ -71,7 +71,6 @@ class Encoder(object):
         In a generalized encode function, you pass in your inputs,
         masks, and an initial
         hidden state input into this function.
-
         :param inputs: Symbolic representations of your input with shape = (batch_size, length/max_length, embed_size)
         :param masks: this is to make sure tf.nn.dynamic_rnn doesn't iterate
                       through masked steps
@@ -164,7 +163,7 @@ class Decoder(object):
         fw_states = tf.pack(fw_states)
         fw_states = tf.transpose(fw_states, perm=(1,0,2))
         cell = tf.nn.rnn_cell.BasicLSTMCell(num_units=self.output_size, state_is_tuple=False)
-        bw_states = []
+        bk_states = []
         with tf.variable_scope("Backward_Match-LSTM"):
             W_q = tf.get_variable("W_q", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
             W_r = tf.get_variable("W_r", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -183,11 +182,11 @@ class Decoder(object):
                 p_z = tf.reshape(p_z, [-1, self.output_size])
                 z = tf.concat(1,[p_state, p_z])
                 _, state = cell(z, state)
-                bk_states.append(state )
+                bk_states.append(state)
                 tf.get_variable_scope().reuse_variables() 
-        bw_states = tf.pack(fw_states)
-        bw_states = tf.transpose(bw_states, perm=(1,0,2))            
-        knowledge_rep =  tf.concat(2,[bw_states,bk_states])
+        bk_states = tf.pack(bk_states)
+        bk_states = tf.transpose(bk_states, perm=(1,0,2))            
+        knowledge_rep =  tf.concat(2,[fw_states,bk_states])
         return knowledge_rep
 
 
@@ -198,7 +197,6 @@ class Decoder(object):
         all paragraph tokens on which token should be
         the start of the answer span, and which should be
         the end of the answer span.
-
         :param knowledge_rep: it is a representation of the paragraph and question,
                               decided by how you choose to implement the encoder
         :return:
@@ -210,7 +208,7 @@ class Decoder(object):
         b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
         W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
         c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
-        v = tf.get_variable("v", shape=(input_size,1), initializer=tf.contrib.layers.xavier_initializer())
+        v = tf.get_variable("v", shape=(output_size,1), initializer=tf.contrib.layers.xavier_initializer())
         state = tf.zeros([1, output_size])
         beta_s = []    
         with tf.variable_scope("Boundary-LSTM_start"):
@@ -219,23 +217,23 @@ class Decoder(object):
                 F_s = tf.nn.tanh(tf.matmul(knowledge_rep, V) + tf.mathmul(state, W_a) +b_a)
                 probab_s = tf.reshape(tf.nn.softmax(tf.matmul(F_s, v) + c), shape=[-1, paragraph_length])
                 beta_s.append(probab_s)
-                attn = tf.reshape(probab_e, [-1, 1, paragraph_length])
-                H_r = tf.reshape(questions_states, [-1, paragraph_length, 2*self.output_size])
-                z = tf.matmul(atten, H_r)
+                attn = tf.reshape(probab_s, [-1, 1, paragraph_length])
+                H_r = tf.reshape(knowledge_rep, [-1, paragraph_length, 2*self.output_size])
+                z = tf.matmul(attn, H_r)
                 _, state = cell(z, state, scope="Boundary-LSTM_start")
                 tf.get_variable_scope().reuse_variables()
         beta_s = tf.pack(beta_s)
         beta_s = tf.transpose(beta_s, perm=(1,0,2)) 
 
         # predict end index; beta_e is the probability distribution over the paragraph words
-        cell = tf.nn.rnn_cell.LSTMCell(num_units=input_size, state_is_tuple= False)
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=output_size, state_is_tuple= False)
         V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
         b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
         W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
         c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
-        v = tf.get_variable("v", shape=(input_size,1), initializer=tf.contrib.layers.xavier_initializer())
+        v = tf.get_variable("v", shape=(output_size,1), initializer=tf.contrib.layers.xavier_initializer())
         state = tf.zeros([1, output_size])
-
+        beta_e = []   
         with tf.variable_scope("Boundary-LSTM_end"):
             for time_step in range(self.output_size):
                 H_r = tf.reshape(knowledge_rep, [-1, 2*output_size])
@@ -243,8 +241,8 @@ class Decoder(object):
                 probab_e = tf.reshape(tf.nn.softmax(tf.matmul(F_e, v) + c), shape=[-1, paragraph_length])
                 beta_e.append(probab_e)
                 attn = tf.reshape(probab_e, [-1, 1, paragraph_length])
-                H_r = tf.reshape(questions_states, [-1, paragraph_length, 2*self.output_size])
-                z = tf.matmul(atten, H_r)
+                H_r = tf.reshape(knowledge_rep, [-1, paragraph_length, 2*self.output_size])
+                z = tf.matmul(attn, H_r)
                 _, state = cell(z, state, scope="Boundary-LSTM_start")
                 tf.get_variable_scope().reuse_variables()
         beta_e = tf.pack(beta_e)
@@ -256,7 +254,6 @@ class QASystem(object):
     def __init__(self, encoder, decoder, args, pretrained_embeddings):
         """
         Initializes your System
-
         :param encoder: an encoder that you constructed in train.py
         :param decoder: a decoder that you constructed in train.py
         :param args: pass in more arguments as needed
@@ -440,12 +437,9 @@ class QASystem(object):
         """
         Iterate through the validation dataset and determine what
         the validation cost is.
-
         This method calls self.test() which explicitly calculates validation cost.
-
         How you implement this function is dependent on how you design
         your data iteration function
-
         :return:
         """
         valid_cost = 0
@@ -460,10 +454,8 @@ class QASystem(object):
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
-
         This step actually takes quite some time. So we can only sample 100 examples
         from either training or testing set.
-
         :param session: session should always be centrally managed in train.py
         :param dataset: a representation of our data, in some implementations, you can
                         pass in multiple components (arguments) of one dataset to this function
@@ -503,20 +495,15 @@ class QASystem(object):
     def train(self, session, dataset, train_dir):
         """
         Implement main training loop
-
         TIPS:
         You should also implement learning rate annealing (look into tf.train.exponential_decay)
         Considering the long time to train, you should save your model per epoch.
-
         More ambitious appoarch can include implement early stopping, or reload
         previous models if they have higher performance than the current one
-
         As suggested in the document, you should evaluate your training progress by
         printing out information every fixed number of iterations.
-
         We recommend you evaluate your model performance on F1 and EM instead of just
         looking at the cost.
-
         :param session: it should be passed in from train.py
         :param dataset: a representation of our data, in some implementations, you can
                         pass in multiple components (arguments) of one dataset to this function
@@ -550,6 +537,3 @@ class QASystem(object):
                     self.saver.save(session, results_path)
             print("")
         return best_score
-        
-
-
