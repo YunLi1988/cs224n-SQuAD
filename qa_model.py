@@ -183,7 +183,7 @@ class Decoder(object):
                 state, o = cell(z, state)
                 bw_states.append(state )
                 tf.get_variable_scope().reuse_variables() 
-        bw_states = tf.pack(fw_states)
+        bw_states = tf.pack(bw_states)
         bw_states = tf.transpose(bw_states, perm=(1,0,2))            
         knowledge_rep =  tf.concat(2,[fw_states,bw_states])
         return knowledge_rep
@@ -392,81 +392,39 @@ class QASystem(object):
 
         return outputs
 
-    def run_epoch(self, sess, inputs, labels):
-        """Runs an epoch of training.
+    def create_feed_dict(self, question_batch, context_batch, labels_batch=None):
+        """Creates the feed_dict for the model.
+        NOTE: You do not have to do anything here.
+        """
+        feed_dict = {}
+        feed_dict[self.q_placeholder] = question_batch
+        feed_dict[self.p_placeholder] = context_batch
+        if labels_batch is not None:
+            feed_dict[self.start_labels_placeholder] = labels_batch[0]
+            feed_dict[self.end_labels_placeholder] = labels_batch[1]
+        return feed_dict
 
+
+    def train_on_batch(self, session, question_batch, context_batch, label_batch):
+        feed_dict = self.create_feed_dict(question_batch, context_batch, label_batch);
+        _, loss = session.run([self.train_op, self.loss], feed_dict=feed_dict)
+        return loss
+        
+    def run_epoch(self, sess, inputs):
+        """Runs an epoch of training.
         Args:
             sess: tf.Session() object
-            inputs: np.ndarray of shape (n_samples, n_features)
+            inputs: datasets represented as a dictionary
             labels: np.ndarray of shape (n_samples, n_classes)
         Returns:
             average_loss: scalar. Average minibatch loss of model on epoch.
         """
         n_minibatches, total_loss = 0, 0
-        for input_batch, labels_batch in get_minibatches([inputs, labels], self.config.batch_size):
+        for [question_batch, context_batch, labels_batch] in get_minibatches([inputs['Questions'], inputs['Paragraphs'], inputs['Labels']] , self.config.batch_size):
             n_minibatches += 1
-            total_loss += self.train_on_batch(sess, input_batch, labels_batch)
+            total_loss += self.train_on_batch(sess, question_batch, context_batch, labels_batch)
         return total_loss / n_minibatches
 
-    def fit(self, sess, inputs, labels):
-        """Fit model on provided data.
-
-        Args:
-            sess: tf.Session()
-            inputs: np.ndarray of shape (n_samples, n_features)
-            labels: np.ndarray of shape (n_samples, n_classes)
-        Returns:
-            losses: list of loss per epoch
-        """
-        losses = []
-        for epoch in range(self.config.n_epochs):
-            start_time = time.time()
-            average_loss = self.run_epoch(sess, inputs, labels)
-            duration = time.time() - start_time
-            print ('Epoch {:}: loss = {:.2f} ({:.3f} sec)'.format(epoch, average_loss, duration))
-            losses.append(average_loss)
-        return losses
-    def fit(self, sess, saver, train_examples_raw, dev_set_raw):
-            best_score = 0.
-
-            train_examples = self.preprocess_sequence_data(train_examples_raw)
-            dev_set = self.preprocess_sequence_data(dev_set_raw)
-
-            for epoch in range(self.config.n_epochs):
-                logger.info("Epoch %d out of %d", epoch + 1, self.config.n_epochs)
-                score = self.run_epoch(sess, train_examples, dev_set, train_examples_raw, dev_set_raw)
-                if score > best_score:
-                    best_score = score
-                    if saver:
-                        logger.info("New best score! Saving model in %s", self.config.model_output)
-                        saver.save(sess, self.config.model_output)
-                print("")
-                if self.report:
-                    self.report.log_epoch()
-                    self.report.save()
-            return best_score
-    def run_epoch(self, sess, train_examples, dev_set, train_examples_raw, dev_set_raw):
-        prog = Progbar(target=1 + int(len(train_examples['Paragraphs_masks']) / self.config.batch_size))
-        for i, batch in enumerate(minibatches(train_examples, self.config.batch_size)):
-            loss = self.train_on_batch(sess, *batch)
-            prog.update(i + 1, [("train loss", loss)])
-            if self.report: self.report.log_train_loss(loss)
-        print("")
-
-        #logger.info("Evaluating on training data")
-        #token_cm, entity_scores = self.evaluate(sess, train_examples, train_examples_raw)
-        #logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
-        #logger.debug("Token-level scores:\n" + token_cm.summary())
-        #logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
-
-        logger.info("Evaluating on development data")
-        token_cm, entity_scores = self.evaluate(sess, dev_set, dev_set_raw)
-        logger.debug("Token-level confusion matrix:\n" + token_cm.as_table())
-        logger.debug("Token-level scores:\n" + token_cm.summary())
-        logger.info("Entity level P/R/F1: %.2f/%.2f/%.2f", *entity_scores)
-
-        f1 = entity_scores[-1]
-        return f1
     def answer(self, session, test_x, mask):
 
         yp, yp2 = self.decode(session, test_x, mask)
