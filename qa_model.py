@@ -137,7 +137,7 @@ class Decoder(object):
     def __init__(self, output_size):
         self.output_size = 2*output_size
 
-    def match_LASTM(self,questions_states, paragraph_states, question_length):
+    def match_LASTM(self,questions_states, paragraph_states, question_length, paragraph_length):
         cell = tf.nn.rnn_cell.LSTMCell(num_units=self.output_size, state_is_tuple=False)
         fw_states = []
         with tf.variable_scope("Forward_Match-LSTM"):
@@ -147,7 +147,7 @@ class Decoder(object):
             w = tf.get_variable("w", shape=(self.output_size,1), initializer=tf.contrib.layers.xavier_initializer())
             b = tf.get_variable("b", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
             state = tf.zeros([1, self.output_size])
-            for time_step in range(self.output_size):
+            for time_step in range(paragraph_length):
                 p_state = paragraph_states[:,time_step,:]
                 X_ = tf.reshape(questions_states, [-1, self.output_size])
                 G = tf.nn.tanh(tf.matmul(X_,W_q) + tf.matmul(p_state,W_r) + tf.matmul(state,W_r)+b_p) #batch_size*Q,l
@@ -157,12 +157,12 @@ class Decoder(object):
                 p_z = tf.matmul(atten, X_)
                 p_z = tf.reshape(p_z, [-1, self.output_size])
                 z = tf.concat(1,[p_state, p_z])
-                _, state = cell(z, state)
+                state, o = cell(z, state)
                 fw_states.append(state)
                 tf.get_variable_scope().reuse_variables()
         fw_states = tf.pack(fw_states)
         fw_states = tf.transpose(fw_states, perm=(1,0,2))
-        cell = tf.nn.rnn_cell.BasicLSTMCell(num_units=self.output_size, state_is_tuple=False)
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=self.output_size, state_is_tuple=False)
         bk_states = []
         with tf.variable_scope("Backward_Match-LSTM"):
             W_q = tf.get_variable("W_q", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -171,7 +171,7 @@ class Decoder(object):
             w = tf.get_variable("w", shape=(self.output_size,1), initializer=tf.contrib.layers.xavier_initializer())
             b = tf.get_variable("b", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
             state = tf.zeros([1, self.output_size])
-            for time_step in range(self.output_size):
+            for time_step in range(paragraph_length):
                 p_state = paragraph_states[:,time_step,:]
                 X_ = tf.reshape(questions_states, [-1, self.output_size])
                 G = tf.nn.tanh(tf.matmul(X_,W_q) + tf.matmul(p_state,W_r) + tf.matmul(state,W_r)+b_p) #batch_size*Q,l
@@ -181,8 +181,8 @@ class Decoder(object):
                 p_z = tf.matmul(atten, X_)
                 p_z = tf.reshape(p_z, [-1, self.output_size])
                 z = tf.concat(1,[p_state, p_z])
-                _, state = cell(z, state)
-                bk_states.append(state)
+                state, o = cell(z, state)
+                bk_states.append(state )
                 tf.get_variable_scope().reuse_variables() 
         bk_states = tf.pack(bk_states)
         bk_states = tf.transpose(bk_states, perm=(1,0,2))            
@@ -204,46 +204,47 @@ class Decoder(object):
         output_size = self.output_size
         # predict start index
         cell = tf.nn.rnn_cell.LSTMCell(num_units=output_size, state_is_tuple=False)
-        V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
-        b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
-        W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
-        c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
-        v = tf.get_variable("v", shape=(output_size,1), initializer=tf.contrib.layers.xavier_initializer())
-        state = tf.zeros([1, output_size])
-        beta_s = []    
+        beta_s = []
         with tf.variable_scope("Boundary-LSTM_start"):
-            for time_step in range(self.output_size):
+            V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
+            b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
+            W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
+            c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
+            v = tf.get_variable("v", shape=(output_size,1), initializer=tf.contrib.layers.xavier_initializer())
+            state = tf.zeros([1, output_size])
+              
+            for time_step in range(paragraph_length):
                 H_r = tf.reshape(knowledge_rep, [-1, 2*output_size])
-                F_s = tf.nn.tanh(tf.matmul(knowledge_rep, V) + tf.mathmul(state, W_a) +b_a)
+                F_s = tf.nn.tanh(tf.matmul(H_r, V) + tf.matmul(state, W_a) +b_a)
                 probab_s = tf.reshape(tf.nn.softmax(tf.matmul(F_s, v) + c), shape=[-1, paragraph_length])
                 beta_s.append(probab_s)
-                attn = tf.reshape(probab_s, [-1, 1, paragraph_length])
-                H_r = tf.reshape(knowledge_rep, [-1, paragraph_length, 2*self.output_size])
-                z = tf.matmul(attn, H_r)
-                _, state = cell(z, state, scope="Boundary-LSTM_start")
+                #attn = tf.reshape(probab_s, [-1, paragraph_length])
+                #H_r = tf.reshape(knowledge_rep, [-1, paragraph_length, 2*self.output_size])
+                z = tf.matmul(probab_s, H_r)
+                state, _ = cell(z, state, scope="Boundary-LSTM_start")
                 tf.get_variable_scope().reuse_variables()
         beta_s = tf.pack(beta_s)
         beta_s = tf.transpose(beta_s, perm=(1,0,2)) 
 
         # predict end index; beta_e is the probability distribution over the paragraph words
-        cell = tf.nn.rnn_cell.LSTMCell(num_units=output_size, state_is_tuple= False)
-        V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
-        b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
-        W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
-        c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
-        v = tf.get_variable("v", shape=(output_size,1), initializer=tf.contrib.layers.xavier_initializer())
-        state = tf.zeros([1, output_size])
-        beta_e = []   
+        beta_e=[]
         with tf.variable_scope("Boundary-LSTM_end"):
-            for time_step in range(self.output_size):
+            cell = tf.nn.rnn_cell.LSTMCell(num_units=output_size, state_is_tuple= False)
+            V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
+            b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
+            W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
+            c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
+            v = tf.get_variable("v", shape=(output_size,1), initializer=tf.contrib.layers.xavier_initializer())
+            state = tf.zeros([1, output_size])
+            for time_step in range(paragraph_length):
                 H_r = tf.reshape(knowledge_rep, [-1, 2*output_size])
-                F_e = tf.nn.tanh(tf.matmul(knowledge_rep, V) + tf.mathmul(state, W_a) +b_a)
+                F_e = tf.nn.tanh(tf.matmul(H_r, V) + tf.matmul(state, W_a) +b_a)
                 probab_e = tf.reshape(tf.nn.softmax(tf.matmul(F_e, v) + c), shape=[-1, paragraph_length])
                 beta_e.append(probab_e)
-                attn = tf.reshape(probab_e, [-1, 1, paragraph_length])
-                H_r = tf.reshape(knowledge_rep, [-1, paragraph_length, 2*self.output_size])
-                z = tf.matmul(attn, H_r)
-                _, state = cell(z, state, scope="Boundary-LSTM_start")
+                #attn = tf.reshape(probab_e, [-1, paragraph_length])
+                #H_r = tf.reshape(knowledge_rep, [-1, paragraph_length, 2*self.output_size])
+                z = tf.matmul(probab_e, H_r)
+                state, _ = cell(z, state, scope="Boundary-LSTM_start")
                 tf.get_variable_scope().reuse_variables()
         beta_e = tf.pack(beta_e)
         beta_e = tf.transpose(beta_e, perm=(1,0,2)) 
@@ -295,13 +296,14 @@ class QASystem(object):
         encoded_q, self.q_states= self.encoder.encode_questions(self.q_embeddings, self.q_mask_placeholder, None)
         encoded_p, self.p_states = self.encoder.encode_w_attn(self.p_embeddings, self.p_mask_placeholder, self.q_states, scope="", reuse=False)
         
-        self.knowledge_rep = self.decoder.match_LASTM(self.q_states,self.p_states, self.q_max_length )
+        self.knowledge_rep = self.decoder.match_LASTM(self.q_states,self.p_states, self.q_max_length, self.p_max_length)
 
     def setup_loss(self, preds):
         """
         Set up your loss computation here
         :return:
         """
+        preds = np.array(preds)
         with vs.variable_scope("start_index_loss"):  
             loss_tensor = tf.boolean_mask(tf.nn.sparse_softmax_cross_entropy_with_logits(preds[:,0], self.start_labels_placeholder),self.p_mask_placeholder)
             start_index_loss = tf.reduce_mean(loss_tensor, 0)
@@ -433,6 +435,8 @@ class QASystem(object):
         a_e = np.argmax(yp2, axis=1)
         return (a_s, a_e)
 
+
+
     def validate(self, sess, valid_dataset):
         """
         Iterate through the validation dataset and determine what
@@ -449,6 +453,7 @@ class QASystem(object):
 
 
         return valid_cost
+
 
     def evaluate_answer(self, session, dataset, sample=100, log=False):
         """
@@ -472,7 +477,8 @@ class QASystem(object):
         examples['Labels'] = dataset['Labels'][idx_sample] 
         
         correct_preds, total_correct, total_preds = 0., 0., 0.
-        for _, labels, labels_  in self.answer(sess, examples, masks):
+        masks = True
+        for _, labels, labels_  in self.answer(session, examples, masks):
             pred = set()
             if labels_[0] <= labels_[1]:
                 pred = set(range(labels_[0],labels_[1]+1))
@@ -536,4 +542,5 @@ class QASystem(object):
                 if self.saver:
                     self.saver.save(session, results_path)
             print("")
+
         return best_score
