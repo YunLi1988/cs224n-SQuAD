@@ -136,7 +136,7 @@ class Decoder(object):
     def __init__(self, output_size):
         self.output_size = 2*output_size
 
-    def match_LASTM(self,questions_states, paragraph_states, question_length):
+    def match_LASTM(self,questions_states, paragraph_states, question_length, paragraph_length):
         cell = tf.nn.rnn_cell.LSTMCell(num_units=self.output_size, state_is_tuple=False)
         fw_states = []
         with tf.variable_scope("Forward_Match-LSTM"):
@@ -146,7 +146,7 @@ class Decoder(object):
             w = tf.get_variable("w", shape=(self.output_size,1), initializer=tf.contrib.layers.xavier_initializer())
             b = tf.get_variable("b", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
             state = tf.zeros([1, self.output_size])
-            for time_step in range(self.output_size):
+            for time_step in range(paragraph_length):
                 p_state = paragraph_states[:,time_step,:]
                 X_ = tf.reshape(questions_states, [-1, self.output_size])
                 G = tf.nn.tanh(tf.matmul(X_,W_q) + tf.matmul(p_state,W_r) + tf.matmul(state,W_r)+b_p) #batch_size*Q,l
@@ -156,12 +156,12 @@ class Decoder(object):
                 p_z = tf.matmul(atten, X_)
                 p_z = tf.reshape(p_z, [-1, self.output_size])
                 z = tf.concat(1,[p_state, p_z])
-                _, state = cell(z, state)
+                state, o = cell(z, state)
                 fw_states.append(state)
                 tf.get_variable_scope().reuse_variables()
         fw_states = tf.pack(fw_states)
         fw_states = tf.transpose(fw_states, perm=(1,0,2))
-        cell = tf.nn.rnn_cell.BasicLSTMCell(num_units=self.output_size, state_is_tuple=False)
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=self.output_size, state_is_tuple=False)
         bw_states = []
         with tf.variable_scope("Backward_Match-LSTM"):
             W_q = tf.get_variable("W_q", shape=(self.output_size, self.output_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -170,7 +170,7 @@ class Decoder(object):
             w = tf.get_variable("w", shape=(self.output_size,1), initializer=tf.contrib.layers.xavier_initializer())
             b = tf.get_variable("b", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
             state = tf.zeros([1, self.output_size])
-            for time_step in range(self.output_size):
+            for time_step in range(paragraph_length):
                 p_state = paragraph_states[:,time_step,:]
                 X_ = tf.reshape(questions_states, [-1, self.output_size])
                 G = tf.nn.tanh(tf.matmul(X_,W_q) + tf.matmul(p_state,W_r) + tf.matmul(state,W_r)+b_p) #batch_size*Q,l
@@ -180,12 +180,12 @@ class Decoder(object):
                 p_z = tf.matmul(atten, X_)
                 p_z = tf.reshape(p_z, [-1, self.output_size])
                 z = tf.concat(1,[p_state, p_z])
-                _, state = cell(z, state)
-                bk_states.append(state )
+                state, o = cell(z, state)
+                bw_states.append(state )
                 tf.get_variable_scope().reuse_variables() 
         bw_states = tf.pack(fw_states)
         bw_states = tf.transpose(bw_states, perm=(1,0,2))            
-        knowledge_rep =  tf.concat(2,[bw_states,bk_states])
+        knowledge_rep =  tf.concat(2,[fw_states,bw_states])
         return knowledge_rep
 
 
@@ -208,25 +208,25 @@ class Decoder(object):
         b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
         W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
         c = tf.get_variable("c", shape=(1,1), initializer=tf.contrib.layers.xavier_initializer())
-        v = tf.get_variable("v", shape=(input_size,1), initializer=tf.contrib.layers.xavier_initializer())
+        v = tf.get_variable("v", shape=(output_size,1), initializer=tf.contrib.layers.xavier_initializer())
         state = tf.zeros([1, output_size])
         beta_s = []    
         with tf.variable_scope("Boundary-LSTM_start"):
-            for time_step in range(self.output_size):
+            for time_step in range(paragraph_length):
                 H_r = tf.reshape(knowledge_rep, [-1, 2*output_size])
                 F_s = tf.nn.tanh(tf.matmul(knowledge_rep, V) + tf.mathmul(state, W_a) +b_a)
                 probab_s = tf.reshape(tf.nn.softmax(tf.matmul(F_s, v) + c), shape=[-1, paragraph_length])
                 beta_s.append(probab_s)
-                attn = tf.reshape(probab_e, [-1, 1, paragraph_length])
-                H_r = tf.reshape(questions_states, [-1, paragraph_length, 2*self.output_size])
-                z = tf.matmul(atten, H_r)
-                _, state = cell(z, state, scope="Boundary-LSTM_start")
+                attn = tf.reshape(probab_s, [-1, 1, paragraph_length])
+                H_r = tf.reshape(knowledge_rep, [-1, paragraph_length, 2*self.output_size])
+                z = tf.matmul(attn, H_r)
+                state, _ = cell(z, state, scope="Boundary-LSTM_start")
                 tf.get_variable_scope().reuse_variables()
         beta_s = tf.pack(beta_s)
         beta_s = tf.transpose(beta_s, perm=(1,0,2)) 
 
         # predict end index; beta_e is the probability distribution over the paragraph words
-        cell = tf.nn.rnn_cell.LSTMCell(num_units=input_size, state_is_tuple= False)
+        cell = tf.nn.rnn_cell.LSTMCell(num_units=output_size, state_is_tuple= False)
         V = tf.get_variable("V", shape=(2*output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
         b_a = tf.get_variable("b_a", shape=(1, output_size), initializer=tf.contrib.layers.xavier_initializer())
         W_a = tf.get_variable("W_a", shape=(output_size, output_size), initializer=tf.contrib.layers.xavier_initializer())
@@ -235,7 +235,7 @@ class Decoder(object):
         state = tf.zeros([1, output_size])
 
         with tf.variable_scope("Boundary-LSTM_end"):
-            for time_step in range(self.output_size):
+            for time_step in range(paragraph_length):
                 H_r = tf.reshape(knowledge_rep, [-1, 2*output_size])
                 F_e = tf.nn.tanh(tf.matmul(knowledge_rep, V) + tf.mathmul(state, W_a) +b_a)
                 probab_e = tf.reshape(tf.nn.softmax(tf.matmul(F_e, v) + c), shape=[-1, paragraph_length])
@@ -243,7 +243,7 @@ class Decoder(object):
                 attn = tf.reshape(probab_e, [-1, 1, paragraph_length])
                 H_r = tf.reshape(questions_states, [-1, paragraph_length, 2*self.output_size])
                 z = tf.matmul(atten, H_r)
-                _, state = cell(z, state, scope="Boundary-LSTM_start")
+                state, _ = cell(z, state, scope="Boundary-LSTM_start")
                 tf.get_variable_scope().reuse_variables()
         beta_e = tf.pack(beta_e)
         beta_e = tf.transpose(beta_e, perm=(1,0,2)) 
@@ -296,7 +296,7 @@ class QASystem(object):
         encoded_q, self.q_states= self.encoder.encode_questions(self.q_embeddings, self.q_mask_placeholder, None)
         encoded_p, self.p_states = self.encoder.encode_w_attn(self.p_embeddings, self.p_mask_placeholder, self.q_states, scope="", reuse=False)
         
-        self.knowledge_rep = self.decoder.match_LASTM(self.q_states,self.p_states, self.q_max_length )
+        self.knowledge_rep = self.decoder.match_LASTM(self.q_states,self.p_states, self.q_max_length, self.p_max_length)
 
     def setup_loss(self, preds):
         """
@@ -474,16 +474,15 @@ class QASystem(object):
         a_e = np.argmax(yp2, axis=1)
         return (a_s, a_e)
 
+
+
     def validate(self, sess, valid_dataset):
         """
         Iterate through the validation dataset and determine what
         the validation cost is.
-
         This method calls self.test() which explicitly calculates validation cost.
-
         How you implement this function is dependent on how you design
         your data iteration function
-
         :return:
         """
         valid_cost = 0
@@ -494,14 +493,13 @@ class QASystem(object):
 
         return valid_cost
 
+
     def evaluate_answer(self, session, dataset, sample=100, log=False):
         """
         Evaluate the model's performance using the harmonic mean of F1 and Exact Match (EM)
         with the set of true answer labels
-
         This step actually takes quite some time. So we can only sample 100 examples
         from either training or testing set.
-
         :param session: session should always be centrally managed in train.py
         :param dataset: a representation of our data, in some implementations, you can
                         pass in multiple components (arguments) of one dataset to this function
@@ -541,20 +539,15 @@ class QASystem(object):
     def train(self, session, dataset, train_dir):
         """
         Implement main training loop
-
         TIPS:
         You should also implement learning rate annealing (look into tf.train.exponential_decay)
         Considering the long time to train, you should save your model per epoch.
-
         More ambitious appoarch can include implement early stopping, or reload
         previous models if they have higher performance than the current one
-
         As suggested in the document, you should evaluate your training progress by
         printing out information every fixed number of iterations.
-
         We recommend you evaluate your model performance on F1 and EM instead of just
         looking at the cost.
-
         :param session: it should be passed in from train.py
         :param dataset: a representation of our data, in some implementations, you can
                         pass in multiple components (arguments) of one dataset to this function
@@ -567,13 +560,24 @@ class QASystem(object):
         # you will also want to save your model parameters in train_dir
         # so that you can use your trained model to make predictions, or
         # even continue training
- 
+
+        results_path = os.path.join(train_dir, "{:%Y%m%d_%H%M%S}".format(datetime.now()))
         tic = time.time()
         params = tf.trainable_variables()
         num_params = sum(map(lambda t: np.prod(tf.shape(t.value()).eval()), params))
         toc = time.time()
         logging.info("Number of params: %d (retreival took %f secs)" % (num_params, toc - tic))
-
-        
-
-
+        best_score = 0.
+        for epoch in range(self.config.epochs):
+            logging.info("Epoch %d out of %d", epoch + 1, self.config.epochs)
+            logging.info("Best score so far: "+str(best_score))
+            loss = self.run_epoch(session, dataset)
+            f1, em = self.evaluate_answer(session, dataset, sample=800, log=True)
+            logging.info("loss: " + str(loss) + " f1: "+str(f1)+" em:"+str(em))
+            if f1 > best_score:
+                best_score = f1
+                logging.info("New best score! Saving model in %s", results_path)
+                if self.saver:
+                    self.saver.save(session, results_path)
+            print("")
+        return best_score
