@@ -15,7 +15,7 @@ from tensorflow.python.ops import variable_scope as vs
 from tensorflow.python.ops.nn import dynamic_rnn, bidirectional_dynamic_rnn
 
 from evaluate import exact_match_score, f1_score
-from util import ConfusionMatrix, Progbar, minibatches, get_minibatches
+from util import ConfusionMatrix, Progbar, minibatches, get_minibatches, one_hot
 from defs import LBLS
 
 from q2_rnn_cell import RNNCell
@@ -39,8 +39,8 @@ class LSTMAttnCell(tf.nn.rnn_cell.LSTMCell):
     def __init__(self, num_units, encoder_output, scope=None):
         self.hs = encoder_output
         super(LSTMAttnCell,self).__init__(num_units)
-        
-    
+
+
     def __call__(self, inputs, state, scope=None):
         lstm_out, lstm_state = super(LSTMAttnCell,self).__call__(inputs, state, scope)
         with vs.variable_scope(scope or type(self).__name__):
@@ -53,7 +53,7 @@ class LSTMAttnCell(tf.nn.rnn_cell.LSTMCell):
             context = tf.reduce_sum(self.hs*scores, reduction_indices=1)
             with vs.variable_scope("AttnConcat"):
                 out = tf.nn.relu(tf.nn.rnn_cell._linear([context, lstm_out], self._num_units, True, 1.0))
-            
+
         return (out, tf.nn.rnn_cell.LSTMStateTuple(out,out))
 
 class Encoder(object):
@@ -93,7 +93,7 @@ class Encoder(object):
         cell_bw = tf.nn.rnn_cell.BasicLSTMCell(self.size)
 
         with tf.variable_scope("bi_LSTM"):
-            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(    
+            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(
                                             cell_fw,
                                             cell_bw,
                                             dtype=tf.float32,
@@ -101,13 +101,13 @@ class Encoder(object):
                                             inputs= inputs,
                                             time_major = False
                                             )
-    
+
         final_state_fw = final_state[0].h
         final_state_bw = final_state[1].h
         final_state = tf.concat(1, [final_state_fw, final_state_bw])
         states = tf.concat(2, outputs)
         return final_state, states
-    
+
     def encode_w_attn(self, inputs, masks, prev_states, scope="", reuse=False):
         """
         Run a BiLSTM over the context paragraph conditioned on the question representation.
@@ -117,7 +117,7 @@ class Encoder(object):
         attn_cell_fw = LSTMAttnCell(cell_size, prev_states_fw)
         attn_cell_bw = LSTMAttnCell(cell_size, prev_states_bw)
         with vs.variable_scope(scope, reuse):
-            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(    
+            outputs, final_state = tf.nn.bidirectional_dynamic_rnn(
                                             attn_cell_fw,
                                             attn_cell_bw,
                                             dtype=tf.float32,
@@ -208,7 +208,7 @@ class Decoder(object):
                 bk_states.append(state)
                 tf.get_variable_scope().reuse_variables()
         bk_states = tf.pack(bk_states)
-        bk_states = tf.transpose(bk_states, perm=(1,0,2))            
+        bk_states = tf.transpose(bk_states, perm=(1,0,2))
         knowledge_rep =  tf.concat(2,[fw_states,bk_states])
         return knowledge_rep #None, ...
 
@@ -258,7 +258,7 @@ class Decoder(object):
                 else:
                     o, (c_, state) = tf.nn.dynamic_rnn(cell, inputs=inputs, dtype=tf.float32)
                 tf.get_variable_scope().reuse_variables()
-        
+
         # predict end index; beta_e is the probability distribution over the paragraph words
 
         with tf.variable_scope("Boundary-LSTM_end"):
@@ -315,17 +315,18 @@ class QASystem(object):
         self.q_max_length = self.config.question_size
         self.q_placeholder = tf.placeholder(tf.int32, (None, self.q_max_length))
         self.p_placeholder = tf.placeholder(tf.int32, (None, self.p_max_length))
-        self.answer_span_placeholder = tf.placeholder(tf.int32, (None, 2))
+        self.answer_span_placeholder_start = tf.placeholder(tf.int32, (None))
+        self.answer_span_placeholder_end = tf.placeholder(tf.int32, (None))
         self.q_mask_placeholder = tf.placeholder(tf.bool, (None, self.q_max_length))
         self.p_mask_placeholder = tf.placeholder(tf.bool, (None, self.p_max_length))
-        self.dropout_placeholder = tf.placeholder(tf.float32, ())
+        self.dropout_placeholder = tf.placeholder(tf.float32, (None))
 
         # ==== assemble pieces ====
         with tf.variable_scope("qa", initializer=tf.uniform_unit_scaling_initializer(1.0)):
             self.setup_embeddings()
             self.setup_system()
             self.preds = self.decoder.decode(self.knowledge_rep, self.p_max_length)
-            self.loss = self.setup_loss(self.preds)
+            self.setup_loss(self.preds)
 
         # ==== set up training/updating procedure ====
         optfn = get_optimizer(self.config.optimizer)
@@ -351,10 +352,11 @@ class QASystem(object):
         :return:
         """
         with vs.variable_scope("loss"):
-            self.loss = tf.reduce_mean(
-                tf.nn.sparse_softmax_cross_entropy_with_logits(preds[0], self.answer_span_placeholder[ 0])) + \
-                        tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(preds[1],
-                                                                                      self.answer_span_placeholder[1]))
+            loss_tensor = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.answer_span_placeholder_start, logits = preds[0])
+            start_index_loss = tf.reduce_mean(loss_tensor, 0)
+            loss_tensor = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=self.answer_span_placeholder_end, logits=preds[1])
+            end_index_loss = tf.reduce_mean(loss_tensor, 0)
+            self.loss = [start_index_loss , end_index_loss]
 
     def setup_embeddings(self):
         """
@@ -378,7 +380,8 @@ class QASystem(object):
         if dataset is not None:
             input_feed[self.q_placeholder] = dataset['Questions']
             input_feed[self.p_placeholder] = dataset['Paragraphs']
-            input_feed[self.answer_span_placeholder] = dataset['Labels']
+            input_feed[self.answer_span_placeholder_start] =  dataset['Labels'][:,0]
+            input_feed[self.answer_span_placeholder_end] =  dataset['Labels'][:,1]
         if mask is not None:
             input_feed[self.q_mask_placeholder] = dataset['Questions_masks']
             input_feed[self.p_mask_placeholder] = dataset['Paragraphs_masks']
@@ -450,8 +453,10 @@ class QASystem(object):
         print("contextBatch" + str(len(context_batch)) + 'by' + str(len(context_batch[0])) + str(
             tf.shape(self.p_placeholder)))
         if labels_batch is not None:
-            feed_dict[self.answer_span_placeholder] = labels_batch
-            print("Labels" + str(len(labels_batch[0])) + str(tf.shape(self.answer_span_placeholder)))
+
+            feed_dict[self.answer_span_placeholder_start] = labels_batch[:,0]
+            feed_dict[self.answer_span_placeholder_end] = labels_batch[:, 1]
+            #print("Labels" + str(len(labels_batch[0])) + str(tf.shape(self.answer_span_placeholder_start))
         return feed_dict
 
     def train_on_batch(self, session, question_batch, context_batch, label_batch):
