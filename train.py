@@ -25,7 +25,7 @@ tf.app.flags.DEFINE_integer("output_size", 100, "The output size of your model."
 tf.app.flags.DEFINE_integer("embedding_size", 100, "Size of the pretrained vocabulary.")
 tf.app.flags.DEFINE_string("data_dir", "data/squad", "SQuAD directory (default ./data/squad)")
 tf.app.flags.DEFINE_string("train_dir", "train", "Training directory to save the model parameters (default: ./train).")
-tf.app.flags.DEFINE_string("load_train_dir", "", "Training directory to load model parameters from to resume training (default: {train_dir}).")
+tf.app.flags.DEFINE_string("load_train_dir", "/train/tmp/cs224n-squad-train", "Training directory to load model parameters from to resume training (default: {train_dir}).")
 tf.app.flags.DEFINE_string("log_dir", "log", "Path to store log and flag files (default: ./log)")
 tf.app.flags.DEFINE_string("optimizer", "adam", "adam / sgd")
 tf.app.flags.DEFINE_integer("print_every", 1, "How many iterations to do per print.")
@@ -70,6 +70,7 @@ def get_normalized_train_dir(train_dir):
     This must be done on both train.py and qa_answer.py in order to work.
     """
     global_train_dir = '/tmp/cs224n-squad-train'
+    
     if os.path.exists(global_train_dir):
         os.unlink(global_train_dir)
     if not os.path.exists(train_dir):
@@ -98,13 +99,13 @@ def initialize_datasets(data_dir, dataset='train', debugMode=False):
         output['Questions'].append(q)
         output['Paragraphs'].append(p)
         output['Labels'].append(l)              
-        if debugMode and len(output['Questions']) > 500:
+        if debugMode and len(output['Questions']) > 10:
             break
     # Close files
     questions.close()
     paragraphs.close()
     labels.close()
-    padded_dataset = pad_sequences(output,FLAGS.output_size, FLAGS.question_size)
+    padded_dataset = pad_sequences(output,FLAGS.paragraph_size, FLAGS.question_size)
     return padded_dataset
 
 def main(FLAGS):
@@ -112,7 +113,7 @@ def main(FLAGS):
     print ("INITIALIZING")
     print (80 * "=")
     # Do what you need to load datasets from FLAGS.data_dir
- 
+
     #parser, embeddings, train_examples, dev_set, test_set = load_and_preprocess_data(debug)
     if not os.path.exists('./data/weights/'):
         os.makedirs('./data/weights/')
@@ -122,10 +123,11 @@ def main(FLAGS):
     print ("Loading Embedding Matrix")
     embeddings = np.load(embed_path)['glove']
 
-    
+    print ("Setting up the Encoder")
     encoder = Encoder(size=FLAGS.output_size, vocab_dim=FLAGS.embedding_size)
+    print ("Setting up the Decoder")
     decoder = Decoder(output_size=FLAGS.output_size)
-
+    print ("Setting up the QA system")
     qa = QASystem(encoder, decoder, FLAGS, embeddings)
 
     if not os.path.exists(FLAGS.log_dir):
@@ -138,10 +140,12 @@ def main(FLAGS):
         json.dump(FLAGS.__flags, fout)
 
     with tf.Session() as sess:
-        load_train_dir = get_normalized_train_dir(FLAGS.load_train_dir or FLAGS.train_dir)
+        #load_train_dir = get_normalized_train_dir(FLAGS.load_train_dir or FLAGS.train_dir)
+        load_train_dir = FLAGS.load_train_dir
         print ("Building Network ... ")
         initialize_model(sess, qa, load_train_dir)
-        save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
+        #save_train_dir = get_normalized_train_dir(FLAGS.train_dir)
+        save_train_dir = load_train_dir
         print ("Load Training Data")  
         dataset = initialize_datasets(FLAGS.data_dir, dataset='train', debugMode=True)
         print (80 * "=")
