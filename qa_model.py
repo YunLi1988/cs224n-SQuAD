@@ -350,8 +350,6 @@ class QASystem(object):
         Set up your loss computation here
         :return:
         """
-        # preds = np.array(preds)
-        # print(preds.shape())
         with vs.variable_scope("loss"):
             self.loss = tf.reduce_mean(
                 tf.nn.sparse_softmax_cross_entropy_with_logits(preds[0], self.answer_span_placeholder[ 0])) + \
